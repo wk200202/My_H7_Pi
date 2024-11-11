@@ -1,6 +1,8 @@
 {
     "files.associations": {
         "*.asm": "a51",
-        "bsp_timer.h": "c"
+        "bsp_timer.h": "c",
+        "bsp.h": "c",
+        "bsp_rgb.h": "c"
     }
 }

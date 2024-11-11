@@ -1,47 +1,9 @@
 #include "bsp_timer.h"
 
-/*
-    定义用于硬件定时器的TIM， 可以使 TIM2 - TIM5
+/*************************************************************************
+*		                          变量声明	
+**************************************************************************
 */
-#define USE_TIM2
-// #define USE_TIM3
-// #define USE_TIM4
-// #define USE_TIM5
-
-#ifdef USE_TIM2
-#define TIM_HARD                  TIM2
-#define RCC_TIM_HARD_CLK_ENABLE() __HAL_RCC_TIM2_CLK_ENABLE()
-#define TIM_HARD_IRQn             TIM2_IRQn
-#define TIM_HARD_IRQHandler       TIM2_IRQHandler
-#endif
-
-#ifdef USE_TIM3
-#define TIM_HARD                  TIM3
-#define RCC_TIM_HARD_CLK_ENABLE() __HAL_RCC_TIM3_CLK_ENABLE()
-#define TIM_HARD_IRQn             TIM3_IRQn
-#define TIM_HARD_IRQHandler       TIM3_IRQHandler
-#endif
-
-#ifdef USE_TIM4
-#define TIM_HARD                  TIM4
-#define RCC_TIM_HARD_CLK_ENABLE() __HAL_RCC_TIM4_CLK_ENABLE()
-#define TIM_HARD_IRQn             TIM4_IRQn
-#define TIM_HARD_IRQHandler       TIM4_IRQHandler
-#endif
-
-#ifdef USE_TIM5
-#define TIM_HARD                  TIM5
-#define RCC_TIM_HARD_CLK_ENABLE() __HAL_RCC_TIM5_CLK_ENABLE()
-#define TIM_HARD_IRQn             TIM5_IRQn
-#define TIM_HARD_IRQHandler       TIM5_IRQHandler
-#endif
-
-/* 保存 TIM定时中断到后执行的回调函数指针 */
-static void (*s_TIM_CallBack1)(void);
-static void (*s_TIM_CallBack2)(void);
-static void (*s_TIM_CallBack3)(void);
-static void (*s_TIM_CallBack4)(void);
-
 /* 这2个全局变量转用于 bsp_DelayMS() 函数 */
 static volatile uint32_t s_uiDelayCount = 0;
 static volatile uint8_t s_ucTimeOutFlag = 0;
@@ -49,13 +11,15 @@ static volatile uint8_t s_ucTimeOutFlag = 0;
 /* 定于软件定时器结构体变量 */
 static SOFT_TMR s_tTmr[TMR_COUNT] = {0};
 
-/*
-    全局运行时间，单位1ms
-    最长可以表示 24.85天，如果你的产品连续运行时间超过这个数，则必须考虑溢出问题
-*/
-__IO int32_t g_iRunTime = 0;
+/* 全局运行时间，单位1ms，最长可以表示 49.71天 */
+__IO uint32_t g_iRunTime = 0;
+/* 等待变量初始化 */
+static __IO uint8_t g_ucEnableSystickISR = 0;
 
-static __IO uint8_t g_ucEnableSystickISR = 0; /* 等待变量初始化 */
+/*************************************************************************
+*		                          函数声明	
+**************************************************************************
+*/
 
 static void bsp_SoftTimerDec(SOFT_TMR *_tmr);
 
@@ -63,7 +27,7 @@ static void bsp_SoftTimerDec(SOFT_TMR *_tmr);
 *	@brief 		初始化bsp定时器
 *	@param 		None
 *	@retval		None
-*	@note  		包含sysTick定时器、硬件定时器和软件定时器的初始化
+*	@note  		包含sysTick定时器和软件定时器的初始化
 *	@author		HarryWang
 *	@date  		2024/11/10
 **************************************************************************
@@ -79,26 +43,21 @@ void bsp_InitTimer(void)
         s_tTmr[i].Flag = 0;
         s_tTmr[i].Mode = TMR_ONCE_MODE; /* 缺省是1次性工作模式 */
     }
-
-    /*
-        配置systic中断周期为1ms，并启动systick中断。
-            -- SystemCoreClock / 1000  表示定时频率为 1000Hz， 也就是定时周期为  1ms
-            -- SystemCoreClock / 500   表示定时频率为 500Hz，  也就是定时周期为  2ms
-    */
+    /* 配置systic中断周期为1ms，并启动systick中断。 */
     SysTick_Config(SystemCoreClock / 1000);
-
-    g_ucEnableSystickISR = 1; /* 1表示执行systick中断 */
-
-    bsp_InitHardTimer();
+    /* 1表示执行systick中断 */
+    g_ucEnableSystickISR = 1;
 }
 
-/*
-*********************************************************************************************************
-*	函 数 名: SysTick_ISR
-*	功能说明: SysTick中断服务程序，每隔1ms进入1次
-*	形    参:  无
-*	返 回 值: 无
-*********************************************************************************************************
+/*************************************************************************
+*	@brief 		sysTick中断应用程序
+*	@param 		None
+*	@retval		None
+*	@note  		此函数位于sysTick中断服务程序中，每隔1ms进入1次
+*	@note  		若g_ucEnableSystickISR = 0，则不执行此函数
+*	@author		HarryWang
+*	@date  		2024/11/11
+**************************************************************************
 */
 extern void bsp_RunPer1ms(void);
 extern void bsp_RunPer10ms(void);
@@ -123,7 +82,7 @@ void SysTick_ISR(void)
     g_iRunTime++;
     if (g_iRunTime == 0x7FFFFFFF) /* 这个变量是 int32_t 类型，最大数为 0x7FFFFFFF */
     {
-        g_iRunTime = 0;
+        g_iRunTime = 0; /* 判断溢出，清零 */
     }
 
     bsp_RunPer1ms(); /* 每隔1ms调用一次此函数，此函数在 bsp.c */
@@ -135,13 +94,14 @@ void SysTick_ISR(void)
     }
 }
 
-/*
-*********************************************************************************************************
-*	函 数 名: bsp_SoftTimerDec
-*	功能说明: 每隔1ms对所有定时器变量减1。必须被SysTick_ISR周期性调用。
-*	形    参:  _tmr : 定时器变量指针
-*	返 回 值: 无
-*********************************************************************************************************
+/*************************************************************************
+*	@brief 		软件定时器计数值减1
+*	@param 		tmr : 定时器变量指针
+*	@retval		None
+*	@note  		None
+*	@author		HarryWang
+*	@date  		2024/11/11
+**************************************************************************
 */
 static void bsp_SoftTimerDec(SOFT_TMR *_tmr)
 {
@@ -158,14 +118,13 @@ static void bsp_SoftTimerDec(SOFT_TMR *_tmr)
     }
 }
 
-/*
-**************************************************************************
-*	@brief :	Delay n ms
-*	@param :	n : 延迟长度，单位1 ms 最小值2
-*	@return:	void
-*	@note  :	None
-*	@author:	HarryWang
-*	@date  :	2024/07/14
+/*************************************************************************
+*	@brief 		毫秒级延迟
+*	@param 		n : 延迟长度，单位1ms
+*	@retval		None
+*	@note  		最小值为2，n=1时，实际延迟2ms
+*	@author		HarryWang
+*	@date  		2024/11/11
 **************************************************************************
 */
 void bsp_DelayMS(uint32_t n)
@@ -184,8 +143,6 @@ void bsp_DelayMS(uint32_t n)
     ENABLE_INT(); /* 开中断 */
 
     while (1) {
-        bsp_Idle(); /* CPU空闲执行的操作， 见 bsp.c 和 bsp.h 文件 */
-
         /*
             等待延迟时间到
             注意：编译器认为 s_ucTimeOutFlag = 0，所以可能优化错误，因此 s_ucTimeOutFlag 变量必须申明为 volatile
@@ -196,14 +153,15 @@ void bsp_DelayMS(uint32_t n)
     }
 }
 
-/***************************************************************************
- *	@brief :	Delay n us
- *	@param :	n : 延迟长度，单位1 us
- *	@return:	void
- *   @attention: 必须在systick定时器启动后才能调用此函数
- *	@author:	HarryWang
- *	@date  :	2024/07/14 20:58
- ***************************************************************************/
+/*************************************************************************
+*	@brief 		微秒级延迟
+*	@param 		n : 延迟长度，单位1us
+*	@retval		None
+*	@note  		注意此函数必须在systick启动后才能调用
+*	@author		HarryWang
+*	@date  		2024/11/11
+**************************************************************************
+*/
 void bsp_DelayUS(uint32_t n)
 {
     uint32_t ticks;
@@ -216,7 +174,7 @@ void bsp_DelayUS(uint32_t n)
     ticks = n * (SystemCoreClock / 1000000); /* 需要的节拍数 */
 
     tcnt = 0;
-    told = SysTick->VAL; /* 刚进入时的计数器值 */
+    told = SysTick->VAL; /* 记录刚进入时的计数器值 */
 
     while (1) {
         tnow = SysTick->VAL;
@@ -239,14 +197,15 @@ void bsp_DelayUS(uint32_t n)
     }
 }
 
-/*
-*********************************************************************************************************
-*	函 数 名: bsp_StartTimer
-*	功能说明: 启动一个定时器，并设置定时周期。
-*	形    参:  	_id     : 定时器ID，值域【0,TMR_COUNT-1】。用户必须自行维护定时器ID，以避免定时器ID冲突。
-*				_period : 定时周期，单位1ms
-*	返 回 值: 无
-*********************************************************************************************************
+/*************************************************************************
+*	@brief 		启动软件定时器，定时时间到后，自动置标志，只运行1次
+*	@param 		_id     : 定时器ID，值域【0,TMR_COUNT-1】
+*	@param 		_period : 定时周期，单位1ms
+*	@retval		None
+*	@note  		注意用户需要自己维护定时器ID，以避免定时器ID冲突
+*	@author		HarryWang
+*	@date  		2024/11/11
+**************************************************************************
 */
 void bsp_StartTimer(uint8_t _id, uint32_t _period)
 {
@@ -267,14 +226,15 @@ void bsp_StartTimer(uint8_t _id, uint32_t _period)
     ENABLE_INT(); /* 开中断 */
 }
 
-/*
-*********************************************************************************************************
-*	函 数 名: bsp_StartAutoTimer
-*	功能说明: 启动一个自动定时器，并设置定时周期。
-*	形    参:  	_id     : 定时器ID，值域【0,TMR_COUNT-1】。用户必须自行维护定时器ID，以避免定时器ID冲突。
-*				_period : 定时周期，单位10ms
-*	返 回 值: 无
-*********************************************************************************************************
+/*************************************************************************
+*	@brief 		启动自动定时器，定时时间到后，自动置标志，循环运行
+*	@param 		_id     : 定时器ID，值域【0,TMR_COUNT-1】
+*	@param 		_period : 定时周期，单位1ms
+*	@retval		None
+*	@note  		注意用户需要自己维护定时器ID，以避免定时器ID冲突
+*	@author		HarryWang
+*	@date  		2024/11/11
+**************************************************************************
 */
 void bsp_StartAutoTimer(uint8_t _id, uint32_t _period)
 {
@@ -295,13 +255,14 @@ void bsp_StartAutoTimer(uint8_t _id, uint32_t _period)
     ENABLE_INT(); /* 开中断 */
 }
 
-/*
-*********************************************************************************************************
-*	函 数 名: bsp_StopTimer
-*	功能说明: 停止一个定时器
-*	形    参:  	_id     : 定时器ID，值域【0,TMR_COUNT-1】。用户必须自行维护定时器ID，以避免定时器ID冲突。
-*	返 回 值: 无
-*********************************************************************************************************
+/*************************************************************************
+*	@brief 		停止软件定时器计数
+*	@param 		_id : 定时器ID，值域【0,TMR_COUNT-1】
+*	@retval		None
+*	@note  		用户需要自己维护定时器ID，以避免定时器ID冲突
+*	@author		HarryWang
+*	@date  		2024/11/11
+**************************************************************************
 */
 void bsp_StopTimer(uint8_t _id)
 {
@@ -321,14 +282,14 @@ void bsp_StopTimer(uint8_t _id)
     ENABLE_INT(); /* 开中断 */
 }
 
-/*
-*********************************************************************************************************
-*	函 数 名: bsp_CheckTimer
-*	功能说明: 检测定时器是否超时
-*	形    参:  	_id     : 定时器ID，值域【0,TMR_COUNT-1】。用户必须自行维护定时器ID，以避免定时器ID冲突。
-*				_period : 定时周期，单位1ms
-*	返 回 值: 返回 0 表示定时未到， 1表示定时到
-*********************************************************************************************************
+/*************************************************************************
+*	@brief 		检测定时器是否超时
+*	@param 		_id : 定时器ID，值域【0,TMR_COUNT-1】
+*	@retval		 0 表示定时未到， 1表示定时到
+*	@note  		用户需要自己维护定时器ID，以避免定时器ID冲突
+*	@author		HarryWang
+*	@date  		2024/11/11
+**************************************************************************
 */
 uint8_t bsp_CheckTimer(uint8_t _id)
 {
@@ -344,13 +305,14 @@ uint8_t bsp_CheckTimer(uint8_t _id)
     }
 }
 
-/*
-*********************************************************************************************************
-*	函 数 名: bsp_GetRunTime
-*	功能说明: 获取CPU运行时间，单位1ms。最长可以表示 24.85天，如果你的产品连续运行时间超过这个数，则必须考虑溢出问题
-*	形    参:  无
-*	返 回 值: CPU运行时间，单位1ms
-*********************************************************************************************************
+/*************************************************************************
+*	@brief 		获取CPU运行时间
+*	@param 		None
+*	@retval		CPU运行时间，单位1ms
+*	@note  		注意CPU最长运行时间为49.71天，超过这个时间需要考虑溢出问题
+*	@author		HarryWang
+*	@date  		2024/11/11
+**************************************************************************
 */
 int32_t bsp_GetRunTime(void)
 {
@@ -365,13 +327,14 @@ int32_t bsp_GetRunTime(void)
     return runtime;
 }
 
-/*
-*********************************************************************************************************
-*	函 数 名: bsp_CheckRunTime
-*	功能说明: 计算当前运行时间和给定时刻之间的差值。处理了计数器循环。
-*	形    参:  _LastTime 上个时刻
-*	返 回 值: 当前时间和过去时间的差值，单位1ms
-*********************************************************************************************************
+/*************************************************************************
+*	@brief 		计算当前运行时间和给定时刻之间的差值
+*	@param 		_LastTime : 上个时刻
+*	@retval		差值，单位1ms
+*	@note  		None
+*	@author		HarryWang
+*	@date  		2024/11/11
+**************************************************************************
 */
 int32_t bsp_CheckRunTime(int32_t _LastTime)
 {
@@ -393,13 +356,14 @@ int32_t bsp_CheckRunTime(int32_t _LastTime)
     return time_diff;
 }
 
-/*
-*********************************************************************************************************
-*	函 数 名: SysTick_Handler
-*	功能说明: 系统嘀嗒定时器中断服务程序。启动文件中引用了该函数。
-*	形    参:  无
-*	返 回 值: 无
-*********************************************************************************************************
+/*************************************************************************
+*	@brief 		sysTick中断服务程序
+*	@param 		None
+*	@retval		None
+*	@note  		None
+*	@author		HarryWang
+*	@date  		2024/11/11
+**************************************************************************
 */
 void SysTick_Handler(void)
 {
@@ -411,207 +375,3 @@ void SysTick_Handler(void)
 
     SysTick_ISR(); /* bsp库的滴答定时中断服务程序 */
 }
-
-/*
-*********************************************************************************************************
-*	下面的代码使用一个TIM的4个捕获中断，实现4个硬件定时器
-*********************************************************************************************************
-*/
-
-#ifdef TIM_HARD
-
-/*************************************************************************
-*	@brief 		初始化硬件定时器
-*	@param 		None
-*	@retval		None
-*	@note  		配置 TIMx，用于us级别硬件定时
-*	@note  		TIMx可以用TIM2 - TIM5 之间的TIM, 这些TIM有4个通道, 挂在 APB1 上，输入时钟=SystemCoreClock / 2
-*	@author		HarryWang
-*	@date  		2024/11/10
-**************************************************************************
-*/
-void bsp_InitHardTimer(void)
-{
-    TIM_HandleTypeDef TimHandle = {0};
-    uint32_t usPeriod;
-    uint16_t usPrescaler;
-    uint32_t uiTIMxCLK;
-    TIM_TypeDef *TIMx = TIM_HARD;
-
-    RCC_TIM_HARD_CLK_ENABLE(); /* 使能TIM时钟 */
-
-    /*-----------------------------------------------------------------------
-        bsp.c 文件中 void SystemClock_Config(void) 函数对时钟的配置如下:
-
-        System Clock source       = PLL (HSE)
-        SYSCLK(Hz)                = 480000000 (CPU Clock)
-        HCLK(Hz)                  = 240000000 (AXI and AHBs Clock)
-        AHB Prescaler             = 2
-        D1 APB3 Prescaler         = 2 (APB3 Clock  120MHz)
-        D2 APB1 Prescaler         = 2 (APB1 Clock  120MHz)
-        D2 APB2 Prescaler         = 2 (APB2 Clock  120MHz)
-        D3 APB4 Prescaler         = 2 (APB4 Clock  120MHz)
-
-        因为APB1 prescaler != 1, 所以 APB1上的TIMxCLK = APB1 x 2 = 240MHz;
-        因为APB2 prescaler != 1, 所以 APB2上的TIMxCLK = APB2 x 2 = 240MHz;
-        APB4上面的TIMxCLK没有分频，所以就是120MHz;
-
-        APB1 定时器有 TIM2, TIM3 ,TIM4, TIM5, TIM6, TIM7, TIM12, TIM13, TIM14，LPTIM1
-        APB2 定时器有 TIM1, TIM8 , TIM15, TIM16，TIM17
-        APB4 定时器有 LPTIM2，LPTIM3，LPTIM4，LPTIM5
-
-    ----------------------------------------------------------------------- */
-    if ((TIMx == TIM1) || (TIMx == TIM8) || (TIMx == TIM15) || (TIMx == TIM16) || (TIMx == TIM17)) {
-        /* APB2 定时器时钟 = 200M */
-        uiTIMxCLK = SystemCoreClock / 2;
-    } else {
-        /* APB1 定时器 = 200M */
-        uiTIMxCLK = SystemCoreClock / 2;
-    }
-
-    usPrescaler = uiTIMxCLK / 1000000 - 1; /* 分频比 = 1 */
-
-    if (TIMx == TIM2 || TIMx == TIM5) {
-        usPeriod = 0xFFFFFFFF;
-    } else {
-        usPeriod = 0xFFFF;
-    }
-
-    /*
-       设置分频为usPrescaler后，那么定时器计数器计1次就是1us
-       而参数usPeriod的值是决定了最大计数：
-       usPeriod = 0xFFFF 表示最大0xFFFF微秒。
-       usPeriod = 0xFFFFFFFF 表示最大0xFFFFFFFF微秒。
-    */
-    TimHandle.Instance = TIMx;
-    TimHandle.Init.Prescaler = usPrescaler;
-    TimHandle.Init.Period = usPeriod;
-    TimHandle.Init.ClockDivision = 0;
-    TimHandle.Init.CounterMode = TIM_COUNTERMODE_UP;
-    TimHandle.Init.RepetitionCounter = 0;
-    TimHandle.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
-
-    if (HAL_TIM_Base_Init(&TimHandle) != HAL_OK) {
-        Error_Handler(__FILE__, __LINE__);
-    }
-
-    /* 配置定时器中断，给CC捕获比较中断使用 */
-    {
-        HAL_NVIC_SetPriority(TIM_HARD_IRQn, 0, 2);
-        HAL_NVIC_EnableIRQ(TIM_HARD_IRQn);
-    }
-
-    /* 启动定时器 */
-    HAL_TIM_Base_Start(&TimHandle);
-}
-
-/*
-*********************************************************************************************************
-*	函 数 名: bsp_StartHardTimer
-*	功能说明: 使用TIM2-5做单次定时器使用, 定时时间到后执行回调函数。可以同时启动4个定时器通道，互不干扰。
-*             定时精度正负1us （主要耗费在调用本函数的执行时间）
-*			  TIM2和TIM5 是32位定时器。定时范围很大
-*			  TIM3和TIM4 是16位定时器。
-*	形    参: _CC : 捕获比较通道几，1，2，3, 4
-*             _uiTimeOut : 超时时间, 单位 1us. 对于16位定时器，最大 65.5ms; 对于32位定时器，最大 4294秒
-*             _pCallBack : 定时时间到后，被执行的函数
-*	返 回 值: 无
-*********************************************************************************************************
-*/
-void bsp_StartHardTimer(uint8_t _CC, uint32_t _uiTimeOut, void *_pCallBack)
-{
-    uint32_t cnt_now;
-    uint32_t cnt_tar;
-    TIM_TypeDef *TIMx = TIM_HARD;
-
-    /* H743速度较快，无需补偿延迟，实测精度正负1us */
-
-    cnt_now = TIMx->CNT;
-    cnt_tar = cnt_now + _uiTimeOut; /* 计算捕获的计数器值 */
-    if (_CC == 1) {
-        s_TIM_CallBack1 = (void (*)(void))_pCallBack;
-
-        TIMx->CCR1 = cnt_tar;             /* 设置捕获比较计数器CC1 */
-        TIMx->SR = (uint16_t)~TIM_IT_CC1; /* 清除CC1中断标志 */
-        TIMx->DIER |= TIM_IT_CC1;         /* 使能CC1中断 */
-    } else if (_CC == 2) {
-        s_TIM_CallBack2 = (void (*)(void))_pCallBack;
-
-        TIMx->CCR2 = cnt_tar;             /* 设置捕获比较计数器CC2 */
-        TIMx->SR = (uint16_t)~TIM_IT_CC2; /* 清除CC2中断标志 */
-        TIMx->DIER |= TIM_IT_CC2;         /* 使能CC2中断 */
-    } else if (_CC == 3) {
-        s_TIM_CallBack3 = (void (*)(void))_pCallBack;
-
-        TIMx->CCR3 = cnt_tar;             /* 设置捕获比较计数器CC3 */
-        TIMx->SR = (uint16_t)~TIM_IT_CC3; /* 清除CC3中断标志 */
-        TIMx->DIER |= TIM_IT_CC3;         /* 使能CC3中断 */
-    } else if (_CC == 4) {
-        s_TIM_CallBack4 = (void (*)(void))_pCallBack;
-
-        TIMx->CCR4 = cnt_tar;             /* 设置捕获比较计数器CC4 */
-        TIMx->SR = (uint16_t)~TIM_IT_CC4; /* 清除CC4中断标志 */
-        TIMx->DIER |= TIM_IT_CC4;         /* 使能CC4中断 */
-    } else {
-        return;
-    }
-}
-
-/*
-*********************************************************************************************************
-*	函 数 名: TIMx_IRQHandler
-*	功能说明: TIM 中断服务程序
-*	形    参：无
-*	返 回 值: 无
-*********************************************************************************************************
-*/
-void TIM_HARD_IRQHandler(void)
-{
-    uint16_t itstatus = 0x0, itenable = 0x0;
-    TIM_TypeDef *TIMx = TIM_HARD;
-
-    itstatus = TIMx->SR & TIM_IT_CC1;
-    itenable = TIMx->DIER & TIM_IT_CC1;
-
-    if ((itstatus != (uint16_t)RESET) && (itenable != (uint16_t)RESET)) {
-        TIMx->SR = (uint16_t)~TIM_IT_CC1;
-        TIMx->DIER &= (uint16_t)~TIM_IT_CC1; /* 禁能CC1中断 */
-
-        /* 先关闭中断，再执行回调函数。因为回调函数可能需要重启定时器 */
-        s_TIM_CallBack1();
-    }
-
-    itstatus = TIMx->SR & TIM_IT_CC2;
-    itenable = TIMx->DIER & TIM_IT_CC2;
-    if ((itstatus != (uint16_t)RESET) && (itenable != (uint16_t)RESET)) {
-        TIMx->SR = (uint16_t)~TIM_IT_CC2;
-        TIMx->DIER &= (uint16_t)~TIM_IT_CC2; /* 禁能CC2中断 */
-
-        /* 先关闭中断，再执行回调函数。因为回调函数可能需要重启定时器 */
-        s_TIM_CallBack2();
-    }
-
-    itstatus = TIMx->SR & TIM_IT_CC3;
-    itenable = TIMx->DIER & TIM_IT_CC3;
-    if ((itstatus != (uint16_t)RESET) && (itenable != (uint16_t)RESET)) {
-        TIMx->SR = (uint16_t)~TIM_IT_CC3;
-        TIMx->DIER &= (uint16_t)~TIM_IT_CC3; /* 禁能CC2中断 */
-
-        /* 先关闭中断，再执行回调函数。因为回调函数可能需要重启定时器 */
-        s_TIM_CallBack3();
-    }
-
-    itstatus = TIMx->SR & TIM_IT_CC4;
-    itenable = TIMx->DIER & TIM_IT_CC4;
-    if ((itstatus != (uint16_t)RESET) && (itenable != (uint16_t)RESET)) {
-        TIMx->SR = (uint16_t)~TIM_IT_CC4;
-        TIMx->DIER &= (uint16_t)~TIM_IT_CC4; /* 禁能CC4中断 */
-
-        /* 先关闭中断，再执行回调函数。因为回调函数可能需要重启定时器 */
-        s_TIM_CallBack4();
-    }
-}
-
-#endif
-
-/***************************** 安富莱电子 www.armfly.com (END OF FILE) *********************************/

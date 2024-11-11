@@ -1,6 +1,17 @@
 #include "bsp.h"
 
 /*************************************************************************
+*		                          变量声明	
+**************************************************************************
+*/
+
+#define WS2811_T0H 12   //220ns~380ns
+#define WS2811_T0L 45   //580ns~1us
+
+#define WS2811_T1H 45   //580ns~1us
+#define WS2811_T1L 12   //220ns~420ns
+
+/*************************************************************************
 *	@brief :	WS2811发送一个字节的数据
 *	@param :	dat:数据
 *	@retval:	None
@@ -14,7 +25,7 @@ void WS2811_SendByte(uint8_t dat)   //发送1BIT的数据
     uint8_t i;
     uint16_t j;
     for (i = 0; i < 8; i++) {
-        if (dat & 0x80)   //发送数据1
+        if (dat & 0x80)   // 发送数据1
         {
             RGB_SDA_SET;
             for (j = 0; j < WS2811_T1H; j++) {
@@ -26,7 +37,7 @@ void WS2811_SendByte(uint8_t dat)   //发送1BIT的数据
             }
         } else   //发送数据0
         {
-            RGB_SDA_SET;   // 0
+            RGB_SDA_SET;   // 发送数据0
             for (j = 0; j < WS2811_T0H; j++) {
                 __nop();
             }
@@ -51,7 +62,8 @@ void WS2811_SendByte(uint8_t dat)   //发送1BIT的数据
 void WS2811_Reset(void)
 {
     RGB_SDA_RESET;
-    HAL_Delay(1);
+    // HAL_Delay(1);
+    bsp_DelayMS(1);
 }
 
 /*************************************************************************
@@ -75,7 +87,7 @@ void bsp_RGB_Change_Color(uint8_t R, uint8_t G, uint8_t B)
 
 /*
 **************************************************************************
-*   @brief :    Initialize RGB LED GPIO Peripherals
+*   @brief :    初始化RGB灯
 *   @param :    void
 *   @retval:    void
 *   @note  :    RGB : PI9

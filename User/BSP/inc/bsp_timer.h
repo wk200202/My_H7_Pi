@@ -7,7 +7,7 @@
 *	                           宏定义
 ***************************************************************************/
 
-#define TMR_COUNT 4 /* 软件定时器的个数 （定时器ID范围 0 - 3) */
+#define TMR_COUNT 4 /* 软件定时器的个数 */
 
 /***************************************************************************
 *	                          变量声明
@@ -43,7 +43,5 @@ void bsp_StopTimer(uint8_t _id);
 uint8_t bsp_CheckTimer(uint8_t _id);
 int32_t bsp_GetRunTime(void);
 int32_t bsp_CheckRunTime(int32_t _LastTime);
-void bsp_InitHardTimer(void);
-void bsp_StartHardTimer(uint8_t _CC, uint32_t _uiTimeOut, void *_pCallBack);
 
 #endif   // _BSP_TIMER_H_
